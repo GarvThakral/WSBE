@@ -3,7 +3,7 @@ import makeWASocket, { DisconnectReason, fetchLatestBaileysVersion, useMultiFile
 import Pino from "pino";
 import axios from "axios";
 import qrcode from "qrcode-terminal";
-const webhookUrl = process.env.WA_WEBHOOK_URL ?? "http://localhost:3000/api/auth/whatsapp/webhook";
+const webhookUrl = process.env.WA_WEBHOOK_URL ?? "https://herth-be.vercel.app/api/auth/whatsapp/webhook";
 const sessionDir = process.env.WA_SESSION_DIR ?? "./wa-session";
 const appLogger = Pino({ level: process.env.WA_LOG_LEVEL ?? "info" });
 async function start() {
