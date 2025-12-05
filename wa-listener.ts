@@ -27,7 +27,8 @@ async function start() {
   // KEEP SOCKET ALIVE ON RENDER 🔥
   setInterval(() => {
     try {
-      sock.ws?.ping()
+      ;(sock.ws as any)?.ping?.()
+
     } catch {}
   }, 20000)
 
