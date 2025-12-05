@@ -99,27 +99,38 @@ async function start(): Promise<void> {
     for (const msg of event.messages) {
       if (!msg.message) continue
 
-      const from = msg.key.remoteJid
-      if (!from) continue
+      let from = msg.key.remoteJid
+if (!from) continue
 
-      const text =
-        msg.message.conversation ??
-        msg.message.extendedTextMessage?.text ??
-        msg.message.documentWithCaptionMessage?.message?.documentMessage
-          ?.caption ??
-        ""
+// 🧠 Normalize @lid and other MD identifiers to real phone JID
+try {
+  const wa = await sock.onWhatsApp(from)
+  if (wa?.[0]?.jid) {
+    from = wa[0].jid  // this will be phone@s.whatsapp.net
+  }
+} catch {}
 
-      if (!text.trim()) continue
+// 📱 extract pure phone number always
+const phone = from.split("@")[0]
 
-      try {
-        await axios.post(
-          webhookUrl,
-          {
-            from,
-            body: text.trim(),
-          },
-          { timeout: 5000 }
-        )
+const text =
+  msg.message.conversation ??
+  msg.message.extendedTextMessage?.text ??
+  msg.message.documentWithCaptionMessage?.message?.documentMessage
+    ?.caption ??
+  ""
+
+if (!text.trim()) continue
+
+try {
+  await axios.post(
+    webhookUrl,
+    {
+      from: phone,        // 🔥 REAL PHONE NUMBER GUARANTEED
+      body: text.trim(),
+    },
+    { timeout: 5000 }
+  )
 
         appLogger.info(
           { from },
