@@ -1,4 +1,5 @@
 import "dotenv/config"
+import fs from "fs"
 import makeWASocket, {
   DisconnectReason,
   fetchLatestBaileysVersion,
@@ -9,70 +10,102 @@ import Pino from "pino"
 import axios from "axios"
 import qrcode from "qrcode-terminal"
 
-const webhookUrl = process.env.WA_WEBHOOK_URL ?? "https://herth-be.vercel.app/api/auth/whatsapp/webhook"
-const sessionDir = process.env.WA_SESSION_DIR || "/data/wa-session"
-const appLogger = Pino({ level: process.env.WA_LOG_LEVEL ?? "info" })
+// ========== CONFIG ==========
+const webhookUrl =
+  process.env.WA_WEBHOOK_URL ||
+  "https://herth-be.vercel.app/api/auth/whatsapp/webhook"
 
-async function start() {
+const sessionDir = process.env.WA_SESSION_DIR || "/data/baileys"
+const logLevel = process.env.WA_LOG_LEVEL || "info"
+
+const appLogger = Pino({ level: logLevel })
+
+// Ensure persistent directory exists (Render safe)
+try {
+  fs.mkdirSync(sessionDir, { recursive: true })
+} catch {
+  // ignore mkdir errors
+  // `/data` already exists on Render, only subfolder will be created
+}
+
+// ========== START FUNCTION ==========
+async function start(): Promise<void> {
+  // Load saved session credentials
   const { state, saveCreds } = await useMultiFileAuthState(sessionDir)
   const { version } = await fetchLatestBaileysVersion()
 
+  // Create WhatsApp socket
   const sock = makeWASocket({
     version,
     auth: state,
-    printQRInTerminal: false,
     logger: appLogger.child({ module: "baileys" }),
   })
 
-  // KEEP SOCKET ALIVE ON RENDER 🔥
+  // 🔥 Keep WebSocket alive in Render (prevent idle disconnect)
   setInterval(() => {
     try {
       ;(sock.ws as any)?.ping?.()
-
     } catch {}
   }, 20000)
 
-  sock.ev.on("connection.update", async (update) => {
+  // ===== CONNECTION HANDLER =====
+  sock.ev.on("connection.update", async (update: any) => {
     const { connection, lastDisconnect, qr } = update
 
+    // Show QR on first deploy
     if (qr) {
       qrcode.generate(qr, { small: true })
+      appLogger.info("Scan QR to authenticate WhatsApp")
     }
 
     if (connection === "open") {
-      appLogger.info("WhatsApp connection established")
+      appLogger.info("✔ WhatsApp connected and ready")
     }
 
     if (connection === "close") {
-      const error = lastDisconnect?.error
-      const statusCode = error?.output?.statusCode
+      const error = lastDisconnect?.error as any
 
-      appLogger.warn({ msg: "connection closed", statusCode })
+      const statusCode =
+        error?.output?.statusCode ??
+        error?.status ??
+        error?.code
 
-      // SESSION REPLACED / LOGGED OUT ❗
+      appLogger.warn({
+        msg: "⚠ WhatsApp connection closed",
+        statusCode,
+      })
+
+      // Logged out => must re-auth
       if (statusCode === DisconnectReason.loggedOut) {
-        appLogger.error("Session logged out. Resetting...")
-        await sock.logout()
+        appLogger.error("❌ Session logged out — clearing session files")
+        try {
+          fs.rmSync(sessionDir, { recursive: true, force: true })
+          fs.mkdirSync(sessionDir, { recursive: true })
+        } catch {}
         return start()
       }
 
-      // RECONNECT
+      // Try reconnect after 3s
       setTimeout(() => start(), 3000)
     }
   })
 
+  // 🔃 Save session credentials
   sock.ev.on("creds.update", saveCreds)
 
-  sock.ev.on("messages.upsert", async (event) => {
+  // ===== INCOMING MESSAGES =====
+  sock.ev.on("messages.upsert", async (event: any) => {
     for (const msg of event.messages) {
       if (!msg.message) continue
+
       const from = msg.key.remoteJid
       if (!from) continue
 
       const text =
         msg.message.conversation ??
         msg.message.extendedTextMessage?.text ??
-        msg.message.documentWithCaptionMessage?.message?.documentMessage?.caption ??
+        msg.message.documentWithCaptionMessage?.message?.documentMessage
+          ?.caption ??
         ""
 
       if (!text.trim()) continue
@@ -84,14 +117,24 @@ async function start() {
             from,
             body: text.trim(),
           },
-          { timeout: 5000 },
+          { timeout: 5000 }
         )
-        appLogger.info({ from }, "forwarded WhatsApp code to webhook")
-      } catch (error) {
-        appLogger.error({ err: error, from }, "failed to forward WhatsApp message")
+
+        appLogger.info(
+          { from },
+          "📩 Forwarded WhatsApp message to webhook"
+        )
+      } catch (err: any) {
+        appLogger.error(
+          { err, from },
+          "❌ Failed to forward WhatsApp message"
+        )
       }
     }
   })
 }
 
-start()
+// Run listener
+start().catch((err: any) => {
+  appLogger.error({ err }, "❌ failed to start WhatsApp listener")
+})
