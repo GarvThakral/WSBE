@@ -9,8 +9,8 @@ import Pino from "pino"
 import axios from "axios"
 import qrcode from "qrcode-terminal"
 
-const webhookUrl = process.env.WA_WEBHOOK_URL ?? "herth-be.vercel.app/api/auth/whatsapp/webhook"
-const sessionDir = process.env.WA_SESSION_DIR ?? "./wa-session"
+const webhookUrl = process.env.WA_WEBHOOK_URL ?? "https://herth-be.vercel.app/api/auth/whatsapp/webhook"
+const sessionDir = process.env.WA_SESSION_DIR || "/data/wa-session"
 const appLogger = Pino({ level: process.env.WA_LOG_LEVEL ?? "info" })
 
 async function start() {
@@ -20,26 +20,43 @@ async function start() {
   const sock = makeWASocket({
     version,
     auth: state,
-    printQRInTerminal: true,
+    printQRInTerminal: false,
     logger: appLogger.child({ module: "baileys" }),
   })
 
-  sock.ev.on("connection.update", (update) => {
+  // KEEP SOCKET ALIVE ON RENDER 🔥
+  setInterval(() => {
+    try {
+      sock.ws?.ping()
+    } catch {}
+  }, 20000)
+
+  sock.ev.on("connection.update", async (update) => {
     const { connection, lastDisconnect, qr } = update
-    const statusCode = (lastDisconnect?.error as { output?: { statusCode?: number } } | undefined)?.output
-      ?.statusCode
 
     if (qr) {
       qrcode.generate(qr, { small: true })
     }
-    if (connection === "close") {
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut
-      appLogger.warn({ msg: "connection closed", statusCode, reconnect: shouldReconnect })
-      if (shouldReconnect) {
-        void start()
-      }
-    } else if (connection === "open") {
+
+    if (connection === "open") {
       appLogger.info("WhatsApp connection established")
+    }
+
+    if (connection === "close") {
+      const error = lastDisconnect?.error
+      const statusCode = error?.output?.statusCode
+
+      appLogger.warn({ msg: "connection closed", statusCode })
+
+      // SESSION REPLACED / LOGGED OUT ❗
+      if (statusCode === DisconnectReason.loggedOut) {
+        appLogger.error("Session logged out. Resetting...")
+        await sock.logout()
+        return start()
+      }
+
+      // RECONNECT
+      setTimeout(() => start(), 3000)
     }
   })
 
@@ -76,7 +93,4 @@ async function start() {
   })
 }
 
-void start().catch((err) => {
-  appLogger.error({ err }, "failed to start WhatsApp listener")
-  process.exit(1)
-})
+start()
