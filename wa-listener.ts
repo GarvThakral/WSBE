@@ -15,7 +15,8 @@ const webhookUrl =
   process.env.WA_WEBHOOK_URL ||
   "https://herth-be.vercel.app/api/auth/whatsapp/webhook"
 
-const sessionDir = process.env.WA_SESSION_DIR || "/data/baileys"
+const sessionDir = "./data/baileys"
+
 const logLevel = process.env.WA_LOG_LEVEL || "info"
 
 const appLogger = Pino({ level: logLevel })
